@@ -6,18 +6,40 @@ on:
     types:
       - completed
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
 
-      - name: Display image to deploy
-        run: |
-          echo "CI completed successfully"
-          echo "Commit: ${{ github.event.workflow_run.head_sha }}"
-          echo "Image:"
-          echo "ghcr.io/${GITHUB_REPOSITORY,,}:${{ github.event.workflow_run.head_sha }}"
+            cd ~/fastapi-ci-cd
+
+            export IMAGE_NAME="ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}"
+
+            echo "Deploying image: $IMAGE_NAME"
+
+            docker compose pull app
+            docker compose up -d app
+
+            echo "Waiting for application..."
+            sleep 10
+
+            if curl -fsS http://localhost:8000/health; then
+              echo "Deployment successful!"
+            else
+              echo "Health check failed!"
+              docker compose logs app
+              exit 1
+            fi
