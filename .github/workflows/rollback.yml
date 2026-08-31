@@ -7,3 +7,65 @@ on:
         description: "Docker image SHA to rollback to"
         required: true
         type: string
+
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Rollback application on EC2
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+
+          script: |
+            set -e
+
+            cd ~/fastapi-ci-cd
+
+            REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+
+            IMAGE_TAG="${{ inputs.image_tag }}"
+            IMAGE_NAME="ghcr.io/${REPO_NAME}:${IMAGE_TAG}"
+
+            echo "======================================"
+            echo "Starting rollback"
+            echo "Target image: $IMAGE_NAME"
+            echo "======================================"
+
+            # Pull requested previous version
+            echo "Pulling rollback image..."
+            docker pull "$IMAGE_NAME"
+
+            # Tell Docker Compose which image to use
+            export IMAGE_NAME="$IMAGE_NAME"
+
+            echo "Starting rollback deployment..."
+            docker compose up -d app
+
+            echo "Waiting for application..."
+            sleep 10
+
+            echo "Checking application health..."
+
+            if curl -fsS http://localhost:8000/health; then
+              echo
+              echo "======================================"
+              echo "Rollback successful!"
+              echo "Running image: $IMAGE_NAME"
+              echo "======================================"
+            else
+              echo
+              echo "======================================"
+              echo "Rollback FAILED!"
+              echo "======================================"
+
+              docker compose logs --tail=100 app
+              exit 1
+            fi
+

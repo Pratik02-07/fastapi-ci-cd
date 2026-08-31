@@ -1,28 +1,96 @@
-script: |
-  set -e
+name: CD
 
-  cd ~/fastapi-ci-cd
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
 
-  export REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-  export IMAGE_NAME="ghcr.io/$REPO_NAME:${{ github.event.workflow_run.head_sha }}"
+permissions:
+  contents: read
 
-  echo "Deploying image: $IMAGE_NAME"
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
 
-  docker compose pull app
-  docker compose up -d app
+    steps:
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
 
-  echo "Waiting for application..."
-  sleep 10
+          script: |
+            set -e
 
-  echo "Checking application health..."
+            cd ~/fastapi-ci-cd
 
-  if curl -fsS http://localhost:8000/health; then
-    echo
-    echo "Deployment successful!"
-  else
-    echo
-    echo "Deployment failed!"
-    docker compose logs --tail=100 app
-    exit 1
-  fi
+            # Convert GitHub repository name to lowercase
+            REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
 
+            # Exact Docker image produced by CI
+            IMAGE_NAME="ghcr.io/${REPO_NAME}:${{ github.event.workflow_run.head_sha }}"
+
+            echo "======================================"
+            echo "Starting deployment"
+            echo "Image: $IMAGE_NAME"
+            echo "======================================"
+
+            # Save currently running image for emergency rollback
+            CURRENT_IMAGE=$(docker inspect $(docker compose ps -q app) \
+              --format='{{.Config.Image}}' 2>/dev/null || true)
+
+            echo "Current image: ${CURRENT_IMAGE:-none}"
+
+            # Make image available to Docker Compose
+            export IMAGE_NAME="$IMAGE_NAME"
+
+            echo "Pulling new image..."
+            docker compose pull app
+
+            echo "Starting new application..."
+            docker compose up -d app
+
+            echo "Waiting for application..."
+            sleep 10
+
+            echo "Checking application health..."
+
+            if curl -fsS http://localhost:8000/health; then
+              echo
+              echo "======================================"
+              echo "Deployment successful!"
+              echo "Image: $IMAGE_NAME"
+              echo "======================================"
+            else
+              echo
+              echo "======================================"
+              echo "Health check FAILED"
+              echo "======================================"
+
+              docker compose logs --tail=100 app
+
+              # Automatic rollback
+              if [ -n "$CURRENT_IMAGE" ]; then
+                echo "Rolling back to: $CURRENT_IMAGE"
+
+                export IMAGE_NAME="$CURRENT_IMAGE"
+
+                docker compose up -d app
+
+                sleep 10
+
+                if curl -fsS http://localhost:8000/health; then
+                  echo "Automatic rollback successful!"
+                else
+                  echo "Automatic rollback FAILED!"
+                  docker compose logs --tail=100 app
+                  exit 1
+                fi
+              else
+                echo "No previous image available for rollback."
+                exit 1
+              fi
+            fi
