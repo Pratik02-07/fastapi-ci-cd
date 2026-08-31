@@ -1,45 +1,28 @@
-name: CD
+script: |
+  set -e
 
-on:
-  workflow_run:
-    workflows: ["CI"]
-    types:
-      - completed
+  cd ~/fastapi-ci-cd
 
-permissions:
-  contents: read
+  export REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+  export IMAGE_NAME="ghcr.io/$REPO_NAME:${{ github.event.workflow_run.head_sha }}"
 
-jobs:
-  deploy:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
-    runs-on: ubuntu-latest
+  echo "Deploying image: $IMAGE_NAME"
 
-    steps:
-      - name: Deploy to EC2
-        uses: appleboy/ssh-action@v1.2.2
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            set -e
+  docker compose pull app
+  docker compose up -d app
 
-            cd ~/fastapi-ci-cd
+  echo "Waiting for application..."
+  sleep 10
 
-            export IMAGE_NAME="ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}"
+  echo "Checking application health..."
 
-            echo "Deploying image: $IMAGE_NAME"
+  if curl -fsS http://localhost:8000/health; then
+    echo
+    echo "Deployment successful!"
+  else
+    echo
+    echo "Deployment failed!"
+    docker compose logs --tail=100 app
+    exit 1
+  fi
 
-            docker compose pull app
-            docker compose up -d app
-
-            echo "Waiting for application..."
-            sleep 10
-
-            if curl -fsS http://localhost:8000/health; then
-              echo "Deployment successful!"
-            else
-              echo "Health check failed!"
-              docker compose logs app
-              exit 1
-            fi

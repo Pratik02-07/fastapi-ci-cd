@@ -1,0 +1,9 @@
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image SHA to rollback to"
+        required: true
+        type: string
