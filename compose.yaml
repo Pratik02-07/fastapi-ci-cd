@@ -1,6 +1,7 @@
 services:
   app:
     image: ${IMAGE_NAME}
+    build: .   # <--- Add this line right here
     ports:
       - "8000:8000"
     env_file:
