@@ -7,7 +7,7 @@ pipeline {
         stage('Checkout') {
             steps {
                 git branch: 'main',
-                    url: 'https://github.com/DerbSwag/Devops-fastapi-lab.git'
+                    url: 'https://github.com/Pratik02-07/fastapi-ci-cd.git'
             }
         }
 
